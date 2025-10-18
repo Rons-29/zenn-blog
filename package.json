@@ -1,0 +1,15 @@
+{
+  "name": "zenn-blog",
+  "version": "1.0.0",
+  "description": "My Zenn blog articles",
+  "scripts": {
+    "preview": "zenn preview",
+    "new:article": "zenn new:article",
+    "new:book": "zenn new:book",
+    "check": "./scripts/check-article.sh",
+    "check:all": "find articles -name '*.md' -exec ./scripts/check-article.sh {} \\;"
+  },
+  "devDependencies": {
+    "zenn-cli": "^0.1.144"
+  }
+}

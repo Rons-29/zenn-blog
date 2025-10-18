@@ -41,6 +41,8 @@ ZennとGitHubの連携により、ローカルで記事を執筆し、GitHubに�
 - 自動デプロイ
 - プレビュー機能
 
-## 参考リンク
+## 参考文献
 
 - [Zenn公式ドキュメント](https://zenn.dev/zenn/articles/connect-to-github)
+- [Zenn CLI ガイド](https://zenn.dev/zenn/articles/zenn-cli-guide)
+- [GitHub CLI ドキュメント](https://cli.github.com/manual/)
