@@ -1,5 +1,5 @@
 ---
-title: "大規模プロジェクトでのHusky設定改善：条件付き実行で開発効率を向上"
+title: "大規模TS×AI開発のHusky設計：失敗許容と閾値ガードで"止めない"品質改善"
 emoji: "🔧"
 type: "tech"
 topics: ["husky", "typescript", "eslint", "git", "ci-cd", "ai-development", "mlops", "llm"]
@@ -13,6 +13,16 @@ published: false
 AI開発では、実験的なコードと本番コードが混在しやすく、動的な型推論と静的型検証の境界問題が頻発します。特にLLMアプリケーションやMLツールチェーンでは、型定義の拡張や動的コード生成により、従来の静的解析ツールが機能不全に陥りがちです。
 
 本記事では、600個のTypeScriptエラーを抱えたAI開発プロジェクトで、Huskyの条件付き実行機能を活用して開発を継続し、段階的に品質を向上させた実践例を紹介します。この「戦略的エラー許容」アプローチは、品質を崩さずにスピードを維持するための現実的な解決策として、AI開発現場で広く応用可能です。
+
+## 本稿の前提と適用範囲
+
+- **対象**: モノレポ/ワークスペース構成のTypeScriptプロジェクト（AI/ML基盤を含む）
+- **目的**: 開発を止めず品質を段階的に回復する
+- **非目的**: pre-commitでモノレポ全体の厳格チェックを常時強制すること
+- **安全フェンス**:
+  1. pre-commitは変更ファイル限定の高速チェック
+  2. pre-push/CIでフルチェック＋エラー増加ブロック
+  3. スキップ用環境変数はローカル限定・CI無効
 
 ## 問題の背景
 
@@ -80,30 +90,40 @@ fi
 `run_npm_script`関数に`allow_failure`パラメータを追加し、エラーが発生しても処理を継続できるようにしました。
 
 ```bash
+has_npm_script() {
+  local dir="$1" name="$2"
+  [ -f "$dir/package.json" ] && command -v jq >/dev/null 2>&1 \
+    && jq -e --arg s "$name" '.scripts[$s]?' "$dir/package.json" >/dev/null
+}
+
 run_npm_script() {
-  project_dir="$1"
-  script_name="$2"
-  start_message="$3"
-  failure_message="$4"
-  allow_failure="${5:-false}"
+  local project_dir="$1" script_name="$2" start_message="$3" failure_message="$4" allow_failure="${5:-false}"
 
   if ! has_npm_script "$project_dir" "$script_name"; then
-    echo "ℹ️ $(basename "$project_dir") に ${script_name} スクリプトがないためスキップします"
-    return
+    echo "ℹ️ $(basename "$project_dir") に ${script_name} は見つかりません。スキップ"
+    return 0
   fi
 
   echo "$start_message"
-  if ! (cd "$project_dir" && npm run "$script_name"); then
-    if [ "$allow_failure" = "true" ]; then
-      echo "⚠️ $(basename "$project_dir") の ${script_name} でエラーが発生しましたが、継続します"
-      return
-    else
-      echo "$failure_message"
-      exit 1
-    fi
+  if (cd "$project_dir" && npm run --silent "$script_name"); then
+    return 0
   fi
+
+  if [[ "$allow_failure" == "true" ]]; then
+    echo "⚠️ $(basename "$project_dir") の ${script_name} は失敗しましたが継続します"
+    return 0
+  fi
+
+  echo "$failure_message"
+  return 1
 }
 ```
+
+**改善点**:
+- 戻り値は `return` に統一（フック本体でまとめて `set -e`）
+- `jq` 依存を明記（`package.json` の解析に必要）
+- ログは `--silent` でコンパクトに
+- 未定義関数の呼び出しを修正
 
 ## 実装結果
 
@@ -118,17 +138,18 @@ run_npm_script() {
 ### 使用方法
 
 ```bash
-# すべてのチェックをスキップしてコミット（推奨）
-SKIP_TYPESCRIPT_CHECK=true SKIP_ESLINT_CHECK=true git commit -m "feat: 新機能追加"
-
-# TypeScriptチェックのみスキップ
-SKIP_TYPESCRIPT_CHECK=true git commit -m "fix: バグ修正"
-
-# 通常のコミット（チェックは実行されるが失敗してもコミット継続）
+# 通常: 変更ファイル限定の高速チェック（pre-commitで自動実行）
 git commit -m "feat: 新機能追加"
+
+# 例外（ローカルのみ・緊急時のみ）: 一時的に pre-commit をスキップ
+# ※ pre-push と CI では常にフルチェックが走り、スキップは無効
+SKIP_PRECOMMIT=true git commit -m "wip: ホットフィックス"
+
+# どうしても型/ESLintをローカルでスキップしたい場合（ローカル限定）
+SKIP_TYPESCRIPT_CHECK=true SKIP_ESLINT_CHECK=true git commit -m "wip: 実験コード"
 ```
 
-**注意**: 現在の実装では、環境変数なしでもチェックエラーが発生してもコミットは継続されます。環境変数は完全にスキップしたい場合に使用します。
+**重要**: CI・pre-push では SKIP_* を無視します。ローカルの緊急作業を許容しつつ、リモートに不良が流れないようにします。
 
 ## 段階的修正の計画
 
@@ -136,22 +157,114 @@ git commit -m "feat: 新機能追加"
 
 - フロントエンド: `clsx`, `tailwind-merge`, `jspdf`のインストール完了
 - バックエンド: 依存関係の修復（進行中）
+- **Exit基準**: 全パッケージの依存関係エラー解消
 
 ### Phase 2: ESLint設定の修復 🔄
 
 - `@typescript-eslint/recommended`の設定修正
 - 設定ファイルの最適化
+- **Exit基準**: eslintErrors <= 450（baseline更新）
 
 ### Phase 3: TypeScriptエラーの段階的修正 📋
 
 - 重要なファイルから優先的に修正
 - `exactOptionalPropertyTypes`関連エラーの整理
 - 型定義の改善
+- **Exit基準**: tscErrors <= 300、exactOptionalPropertyTypes を境界層に導入完了
 
 ### Phase 4: 最終的な品質向上 🎯
 
 - 環境変数なしでフルチェック可能に
 - 継続的インテグレーションの強化
+- **Exit基準**: pre-commit から SKIP_* 利用ゼロ／月、CI 連続グリーン 14日
+
+### 計測と可視化
+
+```bash
+# エラー件数の計測
+npm run lint:ci --format json > artifacts/eslint.json
+tsc --pretty false --noEmit | tee artifacts/tsc.txt
+
+# 閾値ガード用のbaseline更新
+node scripts/update-baseline.mjs
+```
+
+**重要**: 各PhaseのExit基準を満たすまで次のPhaseに進まないことで、段階的な品質向上を保証します。
+
+## AI特有の型破綻にどう向き合うか（実装パターン）
+
+AI開発では、従来の静的解析では対応困難な型破綻が頻発します。以下に、TypeScript運用と組み合わせた具体的な対処法を示します。
+
+### ランタイム検証の前置き
+LLM/外部API応答は動的なため、実行時バリデーションを前置きして静的型に昇格させます。
+
+```typescript
+// zod/valibot/arktype 等で実行時バリデーション
+const LLMResponseSchema = z.object({
+  content: z.string(),
+  confidence: z.number().min(0).max(1),
+  metadata: z.record(z.unknown())
+});
+
+// 実行時検証後、静的型に昇格
+type LLMResponse = z.infer<typeof LLMResponseSchema>;
+```
+
+### スキーマ駆動開発
+OpenAPI/JSON Schemaから自動型生成し、型定義の発散を抑制します。
+
+```bash
+# スキーマから型定義を自動生成
+npx openapi-typescript schema.json -o types/api.ts
+```
+
+### 生成コードの隔離
+動的生成されるコードは専用ディレクトリに隔離し、段階的に導入します。
+
+```json
+// tsconfig.json
+{
+  "include": ["src/**/*"],
+  "exclude": ["generated/**/*", "node_modules"]
+}
+
+// generated/ は別のtsconfigで管理
+// generated/tsconfig.json
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "strict": false
+  }
+}
+```
+
+### exactOptionalPropertyTypesの段階導入
+境界層（外部I/O）から適用し、内側へ拡張します。
+
+```typescript
+// 境界層から開始
+interface APIResponse {
+  data: string;
+  error?: string; // undefined と "" を区別
+}
+
+// 内側の型定義は後から適用
+interface InternalState {
+  status: 'loading' | 'success' | 'error';
+  data?: string; // 段階的に strict に移行
+}
+```
+
+### 影響範囲ビルド
+turbo/nx/自作スクリプトで変更影響範囲のみに厳格チェックを適用します。
+
+```bash
+# turbo を使用した影響範囲チェック
+turbo run lint type-check --filter=...[HEAD~1]
+
+# 自作スクリプトの場合
+node scripts/check-affected.mjs
+```
 
 ## 学んだこと
 
@@ -183,7 +296,11 @@ AI開発では、動的型生成や実験コードの混在により、従来の
 
 - [Husky公式ドキュメント](https://typicode.github.io/husky/) - Huskyの設定方法
 - [TypeScript公式ドキュメント](https://www.typescriptlang.org/docs/) - TypeScriptの型システム
-- [ESLint公式ドキュメント](https://eslint.org/docs/) - ESLintの設定とルール
+- [ESLint Flat Config移行ガイド](https://eslint.org/docs/latest/use/configure/configuration-files) - 新しい設定形式への移行
+- [@typescript-eslint 型情報ルール](https://typescript-eslint.io/rules/) - 型情報が必要なルールと不要なルールの分類
 - [Git Hooks公式ドキュメント](https://git-scm.com/book/en/v2/Customizing-Git-Git-Hooks) - Gitフックの仕組み
+- [Turbo影響範囲実行](https://turbo.build/repo/docs/core-concepts/monorepos/filtering) - 変更影響範囲の効率的なチェック
 - [MLOps Best Practices](https://ml-ops.org/) - 機械学習運用のベストプラクティス
 - [AI開発における型安全性の課題](https://www.typescriptlang.org/docs/handbook/declaration-files/do-s-and-don-ts.html) - TypeScript公式ガイド
+- [Zod公式ドキュメント](https://zod.dev/) - ランタイム型検証ライブラリ
+- [OpenAPI TypeScript Generator](https://openapi-ts.pages.dev/) - スキーマ駆動型生成
