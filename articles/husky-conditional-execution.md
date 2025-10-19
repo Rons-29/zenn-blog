@@ -1,5 +1,5 @@
 ---
-title: "大規模TS×AI開発のHusky設計：失敗許容と閾値ガードで"止めない"品質改善"
+title: '大規模TS×AI開発のHusky設計：失敗許容と閾値ガードで「止めない」品質改善'
 emoji: "🔧"
 type: "tech"
 topics: ["husky", "typescript", "eslint", "git", "ci-cd", "ai-development", "mlops", "llm"]
@@ -52,6 +52,8 @@ AI開発プロジェクトでは、以下のような特有の課題が技術負
 
 Huskyの設定で、新旧両方のプロジェクト構造に対応できるよう自動検出機能を実装しました。
 
+**注**: pre-commit は最短フィードバックを目的とし、変更差分にのみ静的解析を適用します。型情報必須の重いルールは pre-push/CI に限定し、体感速度を落とさない設計です。
+
 ```bash
 find_project_dir() {
   for rel_path in "$@"; do
@@ -68,6 +70,8 @@ find_project_dir() {
 ### 2. 条件付き実行の実装
 
 環境変数を使用して、TypeScriptチェックとESLintチェックを個別に制御できるようにしました。
+
+**本記事は ESLint Flat Config（eslint.config.js）前提です。従来の .eslintrc* 利用時はルール解釈・プラグイン解決が異なるため、ここでのコマンドやルール例は適宜読み替えてください。**
 
 ```bash
 # 環境変数でTypeScriptチェックを制御
@@ -151,6 +155,16 @@ SKIP_TYPESCRIPT_CHECK=true SKIP_ESLINT_CHECK=true git commit -m "wip: 実験コ�
 
 **重要**: CI・pre-push では SKIP_* を無視します。ローカルの緊急作業を許容しつつ、リモートに不良が流れないようにします。
 
+```bash
+# .husky/pre-push の冒頭で品質ゲートを実装
+# 品質ゲート：ローカル専用のスキップ変数は無効化
+unset SKIP_TYPESCRIPT_CHECK
+unset SKIP_ESLINT_CHECK
+unset SKIP_PRECOMMIT
+```
+
+失敗許容は緊急のローカル作業に限定します。レビュー対象のブランチや共有リポジトリでは利用禁止をチーム規約に明記してください。pre-push/CIでは強制的に無効化されます（コード参照）。
+
 ## 段階的修正の計画
 
 ### Phase 1: 依存関係の修復 ✅
@@ -158,6 +172,8 @@ SKIP_TYPESCRIPT_CHECK=true SKIP_ESLINT_CHECK=true git commit -m "wip: 実験コ�
 - フロントエンド: `clsx`, `tailwind-merge`, `jspdf`のインストール完了
 - バックエンド: 依存関係の修復（進行中）
 - **Exit基準**: 全パッケージの依存関係エラー解消
+
+**注**: pre-commit では ビルド/コンパイルを走らせません。tsc --noEmit に限定し、ネイティブ依存（例: better-sqlite3）のビルド可否は pre-push/CI のコンテナ/ビルドジョブで検証します。
 
 ### Phase 2: ESLint設定の修復 🔄
 
@@ -192,6 +208,8 @@ node scripts/update-baseline.mjs
 **重要**: 各PhaseのExit基準を満たすまで次のPhaseに進まないことで、段階的な品質向上を保証します。
 
 ## AI特有の型破綻にどう向き合うか（実装パターン）
+
+ここでの「AI開発」は、LLMや外部推論APIを伴うWeb/サービス実装を指し、動的スキーマ（入出力の揺れ）を扱う境界層を含みます。本稿の対策は**その境界層を"まず守る"**ための運用設計です。
 
 AI開発では、従来の静的解析では対応困難な型破綻が頻発します。以下に、TypeScript運用と組み合わせた具体的な対処法を示します。
 
@@ -262,6 +280,9 @@ turbo/nx/自作スクリプトで変更影響範囲のみに厳格チェック�
 # turbo を使用した影響範囲チェック
 turbo run lint type-check --filter=...[HEAD~1]
 
+# CIでは比較対象を環境変数で注入して漏れを防ぐ
+turbo run lint type-check --filter=...[${BASE_SHA:-origin/main}]
+
 # 自作スクリプトの場合
 node scripts/check-affected.mjs
 ```
@@ -294,13 +315,104 @@ AI開発では、動的型生成や実験コードの混在により、従来の
 
 ## 参考文献
 
-- [Husky公式ドキュメント](https://typicode.github.io/husky/) - Huskyの設定方法
-- [TypeScript公式ドキュメント](https://www.typescriptlang.org/docs/) - TypeScriptの型システム
-- [ESLint Flat Config移行ガイド](https://eslint.org/docs/latest/use/configure/configuration-files) - 新しい設定形式への移行
-- [@typescript-eslint 型情報ルール](https://typescript-eslint.io/rules/) - 型情報が必要なルールと不要なルールの分類
-- [Git Hooks公式ドキュメント](https://git-scm.com/book/en/v2/Customizing-Git-Git-Hooks) - Gitフックの仕組み
-- [Turbo影響範囲実行](https://turbo.build/repo/docs/core-concepts/monorepos/filtering) - 変更影響範囲の効率的なチェック
-- [MLOps Best Practices](https://ml-ops.org/) - 機械学習運用のベストプラクティス
-- [AI開発における型安全性の課題](https://www.typescriptlang.org/docs/handbook/declaration-files/do-s-and-don-ts.html) - TypeScript公式ガイド
-- [Zod公式ドキュメント](https://zod.dev/) - ランタイム型検証ライブラリ
-- [OpenAPI TypeScript Generator](https://openapi-ts.pages.dev/) - スキーマ駆動型生成
+- [Husky公式ドキュメント](https://typicode.github.io/husky/) - Huskyの設定方法（現行版）
+- [TypeScript公式ドキュメント](https://www.typescriptlang.org/docs/) - TypeScriptの型システム（現行版）
+- [ESLint Flat Config移行ガイド](https://eslint.org/docs/latest/use/configure/configuration-files) - 新しい設定形式への移行（現行版）
+- [@typescript-eslint 型情報ルール](https://typescript-eslint.io/rules/) - 型情報が必要なルールと不要なルールの分類（現行版）
+- [Git Hooks公式ドキュメント](https://git-scm.com/book/en/v2/Customizing-Git-Git-Hooks) - Gitフックの仕組み（現行版）
+- [Turbo影響範囲実行](https://turbo.build/repo/docs/core-concepts/monorepos/filtering) - 変更影響範囲の効率的なチェック（現行版）
+- [MLOps Best Practices](https://ml-ops.org/) - 機械学習運用のベストプラクティス（現行版）
+- [AI開発における型安全性の課題](https://www.typescriptlang.org/docs/handbook/declaration-files/do-s-and-don-ts.html) - TypeScript公式ガイド（現行版）
+- [Zod公式ドキュメント](https://zod.dev/) - ランタイム型検証ライブラリ（現行版）
+- [OpenAPI TypeScript Generator](https://openapi-ts.pages.dev/) - スキーマ駆動型生成（現行版）
+
+## 付録：実装スクリプト
+
+### scripts/tsc-changed.mjs（変更ファイル限定型チェック）
+
+```javascript
+import { execSync } from 'child_process';
+import { readFileSync } from 'fs';
+
+// 変更されたTypeScriptファイルを取得
+const changedFiles = execSync('git diff --name-only --cached', { encoding: 'utf8' })
+  .split('\n')
+  .filter(file => file.endsWith('.ts') || file.endsWith('.tsx'));
+
+if (changedFiles.length === 0) {
+  console.log('変更されたTypeScriptファイルがありません');
+  process.exit(0);
+}
+
+// 該当パッケージのtsconfigを検出して型チェック実行
+for (const file of changedFiles) {
+  const packageDir = file.split('/')[0];
+  try {
+    execSync(`cd ${packageDir} && npx tsc --noEmit`, { stdio: 'inherit' });
+  } catch (error) {
+    console.error(`型チェックエラー: ${file}`);
+    process.exit(1);
+  }
+}
+```
+
+### scripts/update-baseline.mjs（エラー基準値更新）
+
+```javascript
+import { execSync } from 'child_process';
+import { writeFileSync, mkdirSync } from 'fs';
+
+// エラー件数を計測
+const eslintErrors = execSync('npm run lint:ci --format json', { encoding: 'utf8' })
+  .split('\n')
+  .filter(line => line.includes('"severity":2'))
+  .length;
+
+const tscErrors = execSync('npx tsc --pretty false --noEmit 2>&1', { encoding: 'utf8' })
+  .split('\n')
+  .filter(line => line.includes('error TS'))
+  .length;
+
+// 基準値を更新
+mkdirSync('artifacts', { recursive: true });
+writeFileSync('artifacts/errors-baseline.json', JSON.stringify({
+  eslintErrors,
+  tscErrors,
+  timestamp: new Date().toISOString()
+}, null, 2));
+
+console.log(`基準値更新: ESLint=${eslintErrors}, TypeScript=${tscErrors}`);
+```
+
+### scripts/guard-error-threshold.mjs（エラー増加ブロック）
+
+```javascript
+import { readFileSync } from 'fs';
+
+try {
+  const latest = JSON.parse(readFileSync('artifacts/errors-latest.json', 'utf8'));
+  const baseline = JSON.parse(readFileSync('artifacts/errors-baseline.json', 'utf8'));
+
+  const worse = latest.tscErrors > baseline.tscErrors || 
+                latest.eslintErrors > baseline.eslintErrors;
+
+  if (worse) {
+    console.error('❌ エラー件数が増加しました。push を中断します。');
+    process.exit(1);
+  }
+  console.log('✅ エラー件数は悪化していません。');
+} catch (error) {
+  console.log('ℹ️ 基準値ファイルが見つかりません。初回実行として継続します。');
+}
+```
+
+## 想定ツッコミ → 即応答
+
+**Q: 失敗許容って結局"甘え"では？**
+A: pre-commit は差分のみの軽量検査で速度最優先。厳格検査は pre-push/CI に寄せ、エラー増加ブロックで品質低下を物理的に止めます。SKIP_* は CIで無効（コード参照）。
+
+**Q: LLMの揺れる出力に型なんて当てられないのでは？**
+A: ランタイム検証前置き + 型への昇格（zod 等）で境界を固定します。内側は exactOptionalPropertyTypes を段階導入。
+
+**Q: turbo/nx がないと再現できない？**
+A: 影響範囲は 自作スクリプトでも可（付録参照）。ツール非依存の設計です。
