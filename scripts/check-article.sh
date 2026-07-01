@@ -29,7 +29,7 @@ else
 fi
 
 # 参考リンクの存在チェック
-if grep -q "\[.*\]\(http.*\)" "$ARTICLE_PATH"; then
+if grep -Eq "\[.+\]\(https?://[^)]+\)" "$ARTICLE_PATH"; then
     echo "✅ 参考リンクが見つかりました"
 else
     echo "⚠️  参考リンクが見つかりません"
@@ -39,7 +39,7 @@ fi
 # 参考文献セクション内のリンク数をカウント
 if grep -q "## 参考文献\|## 参考リンク\|## References" "$ARTICLE_PATH"; then
     REF_SECTION=$(grep -A 20 "## 参考文献\|## 参考リンク\|## References" "$ARTICLE_PATH")
-    REF_LINKS=$(echo "$REF_SECTION" | grep -c "\[.*\](https.*)" 2>/dev/null)
+    REF_LINKS=$(echo "$REF_SECTION" | grep -Ec "\[.+\]\(https?://[^)]+\)" 2>/dev/null)
     
     if [ "$REF_LINKS" -gt 0 ]; then
         echo "✅ 参考文献セクション内に $REF_LINKS 個のリンクが見つかりました"
